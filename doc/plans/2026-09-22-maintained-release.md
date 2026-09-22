@@ -69,3 +69,11 @@ The 14-file focused suite passed 276 tests. The additional guard suite passed
 131 tests, including both secret-filtering paths; one dependency-scheduling
 test exceeded its five-second timeout during concurrent validation and requires
 an isolated rerun. Repository-wide validation results are recorded in the PR.
+
+## Fork CI
+The existing PR workflow now also targets homeservica/release, so upgrades
+receive the upstream build/test/typecheck gates. The commitperclip review bot
+runs only in paperclipai/paperclip because its app credentials and installation
+belong to upstream. Its initial fork run failed before code analysis because
+dependency review was unavailable; it would also require the upstream bot key.
+This upstream-only bot is not a substitute for the normal PR checks.
