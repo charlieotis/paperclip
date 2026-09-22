@@ -1485,8 +1485,12 @@ describe("shared ACPX engine runtime behavior", () => {
       }) as never,
     });
     const previousApiKey = process.env.PAPERCLIP_API_KEY;
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousAuthSecret = process.env.BETTER_AUTH_SECRET;
     try {
       delete process.env.PAPERCLIP_API_KEY;
+      process.env.DATABASE_URL = "synthetic-server-database-secret";
+      process.env.BETTER_AUTH_SECRET = "synthetic-server-auth-secret";
       const result = await execute({
         runId: "run-1",
         agent: { id: "agent-1", companyId: "company-1" },
@@ -1500,7 +1504,13 @@ describe("shared ACPX engine runtime behavior", () => {
       expect(result.exitCode).toBe(0);
       expect(observedSessionEnv?.PAPERCLIP_API_KEY).toBe("runtime-key");
       expect(process.env.PAPERCLIP_API_KEY).toBeUndefined();
+      expect(observedSessionEnv?.DATABASE_URL).toBeUndefined();
+      expect(observedSessionEnv?.BETTER_AUTH_SECRET).toBeUndefined();
     } finally {
+      if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = previousDatabaseUrl;
+      if (previousAuthSecret === undefined) delete process.env.BETTER_AUTH_SECRET;
+      else process.env.BETTER_AUTH_SECRET = previousAuthSecret;
       if (previousApiKey === undefined) delete process.env.PAPERCLIP_API_KEY;
       else process.env.PAPERCLIP_API_KEY = previousApiKey;
     }
