@@ -3325,6 +3325,8 @@ export async function runChildProcess(
       delete rawMerged[key];
     }
 
+    delete rawMerged.DATABASE_URL;
+      delete rawMerged.BETTER_AUTH_SECRET; // LOCAL AGENT ENV SCRUB
     const mergedEnv = ensurePathInEnv(rawMerged);
     if (opts.localProcessSandbox?.homeDir) {
       mergedEnv.HOME = opts.localProcessSandbox.homeDir;

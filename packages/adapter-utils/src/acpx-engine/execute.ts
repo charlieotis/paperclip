@@ -1728,7 +1728,7 @@ async function buildRuntime(input: {
   if (acpxAgent === "gemini" && agentCommandShell) {
     const normalized = await normalizeGeminiAcpCommandShell(
       agentCommandShell,
-      ensurePathInEnv({ ...process.env, ...env }),
+      ensurePathInEnv({ ...scrubServerEnvForAgent(process.env), ...env }),
     );
     if (normalized !== agentCommandShell) {
       agentCommandShell = normalized;
@@ -2266,9 +2266,26 @@ async function applySessionConfigOptions(input: {
  * narrowed to string values. Shared by the remote concurrent bring-up and the
  * local / runner-less lane so both resolve the runtime env identically.
  */
+// LOCAL AGENT ENV SCRUB (v2026.824.1 bridge; upstream #12387 replaces this with an allowlist).
+// Never let server-only secrets reach an agent process: mirrors sanitizeInheritedPaperclipEnv
+// (PAPERCLIPAI_CMD + PAPERCLIP_* except the runtime API/listen keys) and additionally strips
+// DATABASE_URL and BETTER_AUTH_SECRET. Explicit run `env` is applied afterwards and still wins.
+function scrubServerEnvForAgent(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...baseEnv };
+  delete env.PAPERCLIPAI_CMD;
+  delete env.DATABASE_URL;
+  delete env.BETTER_AUTH_SECRET;
+  for (const key of Object.keys(env)) {
+    if (!key.startsWith("PAPERCLIP_")) continue;
+    if (key === "PAPERCLIP_RUNTIME_API_URL" || key === "PAPERCLIP_LISTEN_HOST" || key === "PAPERCLIP_LISTEN_PORT") continue;
+    delete env[key];
+  }
+  return env;
+}
+
 function resolveRuntimeEnv(env: Record<string, string>): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(ensurePathInEnv({ ...process.env, ...env })).filter(
+    Object.entries(ensurePathInEnv({ ...scrubServerEnvForAgent(process.env), ...env })).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",
     ),
   );
