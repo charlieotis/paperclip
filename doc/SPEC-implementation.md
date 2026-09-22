@@ -1208,6 +1208,26 @@ Scheduler must skip invocation when:
 - an existing run is active
 - hard budget limit has been hit
 
+### Agent return-to-todo continuation
+
+An authenticated assignee moving its own issue from in_progress to todo
+without changing assignment requests one normal-model follow-up through the
+native heartbeat queue. Timer heartbeats need not be enabled. The request is
+scoped to the issue, company, and source run; repeated requests for the same
+source run are serialized and deduplicated.
+
+If the source run is still active, the follow-up waits in the durable deferred
+issue queue. Promotion requires a successful source run and an issue that is
+still todo, assigned to that agent, and free of execution-policy state.
+Existing agent invokability, budget, concurrency, and subtree-hold gates still
+apply. Board edits, reassignment, review handoffs, blocked work, and terminal
+work do not opt into this rule.
+
+A chain is limited to three automatic follow-up runs. At the limit, Paperclip
+posts a system note and records the exhausted decision without triggering a
+comment wake. A later explicit wake starts a new chain. This rule does not scan
+or retroactively resume existing todo tickets.
+
 ## 12. Governance and Approval Flows
 
 ## 12.1 Hiring

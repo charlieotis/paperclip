@@ -1,3 +1,4 @@
+import { AGENT_TODO_CONTINUATION_REASON, canContinueReturnedTodo } from "./issue-todo-continuation.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
@@ -176,7 +177,7 @@ import {
 import { buildDocumentReviewContext, buildPlanReviewContext } from "./plan-review-context.js";
 import { executionWorkspaceService, mergeExecutionWorkspaceConfig } from "./execution-workspaces.js";
 import { workspaceOperationService, type WorkspaceOperationRecorder } from "./workspace-operations.js";
-import { isProcessGroupAlive, terminateLocalService } from "./local-service-supervisor.js";
+import { isPidAlive, isProcessGroupAlive, terminateLocalService } from "./local-service-supervisor.js";
 import {
   HEARTBEAT_RUN_SCRATCH_MARKER,
   buildHeartbeatRunScratchEnv,
@@ -745,6 +746,7 @@ function mergeAdapterRecoveryMetadata(input: {
   };
 }
 const RUNNING_ISSUE_WAKE_REASONS_REQUIRING_FOLLOWUP = new Set([
+  AGENT_TODO_CONTINUATION_REASON,
   "approval_approved",
   ISSUE_BLOCKERS_RESOLVED_WAKE_REASON,
   "issue_recovery_action_restored",
@@ -16116,7 +16118,49 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         if (managedMcpConfig) {
           adapterContext.paperclipManagedMcp = managedMcpConfig;
         }
-        adapterResult = await adapter.execute({
+        // --- LOCAL ORPHAN-RUN SETTLEMENT GUARD (bridge backport of #11576) ---
+        // v2026.824.1's ACP engine can leave `adapter.execute()` pending forever
+        // when the run child's completion event is lost, stranding the run as
+        // "running" until the recovery sweep salvages it as `orphaned_running_run`
+        // -- which drops the disposition and breaks the auto-advance handoff
+        // (operators then must comment "proceed"). This guard rejects once the run
+        // child has been CONFIRMED dead for a sustained grace, so the await lands
+        // in the outer catch, which finalizes the run "failed" and calls
+        // releaseIssueExecutionAndPromote -- advancing the workflow instead of
+        // stalling. It can never fire while the child is alive, so healthy
+        // long-running turns are untouched. Remove once on a Paperclip release
+        // containing #11576.
+        let orphanGuardPid: number | null = null;
+        let orphanGuardPgid: number | null = null;
+        let orphanGuardTimer: ReturnType<typeof setInterval> | null = null;
+        let orphanGuardDeadTicks = 0;
+        const ORPHAN_GUARD_INTERVAL_MS = 20_000;
+        const ORPHAN_GUARD_DEAD_TICKS = 6; // ~120s confirmed-dead before failing
+        const orphanGuard = new Promise<never>((_resolve, orphanGuardReject) => {
+          orphanGuardTimer = setInterval(() => {
+            const pid = orphanGuardPid;
+            if (pid == null) return; // child not spawned yet -- never fire
+            const pgid = orphanGuardPgid;
+            const alive =
+              isPidAlive(pid) || (pgid != null && isProcessGroupAlive(pgid));
+            if (alive) {
+              orphanGuardDeadTicks = 0;
+              return;
+            }
+            orphanGuardDeadTicks += 1;
+            if (orphanGuardDeadTicks >= ORPHAN_GUARD_DEAD_TICKS) {
+              orphanGuardReject(
+                new Error(
+                  `run ${run.id} child process (pid ${pid}) exited without run ` +
+                    `settlement; failing run via local orphan-settlement guard`,
+                ),
+              );
+            }
+          }, ORPHAN_GUARD_INTERVAL_MS);
+          if (typeof orphanGuardTimer?.unref === "function") orphanGuardTimer.unref();
+        });
+        try {
+        adapterResult = await Promise.race([adapter.execute({
           runId: run.id,
           agent,
           runtime: runtimeForAdapter,
@@ -16140,6 +16184,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             await recordCurrentHeartbeatRunRuntimeProgress(run, progress, issueId);
           },
           onSpawn: async (meta) => {
+            if (typeof meta.pid === "number") orphanGuardPid = meta.pid;
+            if ("processGroupId" in meta && typeof meta.processGroupId === "number")
+              orphanGuardPgid = meta.processGroupId;
             await persistRunProcessMetadata(run.id, {
               pid: meta.pid,
               processGroupId:
@@ -16150,7 +16197,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             });
           },
           authToken: authToken ?? undefined,
-        });
+        }), orphanGuard]);
+        } finally {
+          if (orphanGuardTimer) clearInterval(orphanGuardTimer);
+        }
         // Adapter returned cleanly, which means its workspace-restore finally
         // block also ran without throwing. Record the workspace_finalize
         // barrier so dependents that share this executionWorkspace can wake.
@@ -17126,6 +17176,18 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
         const deferredPayload = parseObject(deferred.payload);
         const deferredContextSeed = parseObject(deferredPayload[DEFERRED_WAKE_CONTEXT_KEY]);
+        if (deferredContextSeed.wakeReason === AGENT_TODO_CONTINUATION_REASON &&
+            !canContinueReturnedTodo({
+              issue, companyId: run.companyId, agentId: deferred.agentId,
+              sourceStatus: run.status, promoting: true,
+            })) {
+          await tx.update(agentWakeupRequests).set({
+            status: "cancelled", finishedAt: new Date(), updatedAt: new Date(),
+            error: "Automatic todo continuation no longer eligible after source run finished",
+          }).where(eq(agentWakeupRequests.id, deferred.id));
+          continue;
+        }
+
         const activePauseHold = await treeControlSvc.getActivePauseHoldGate(issue.companyId, issue.id);
         const treeHoldInteractionWake = activePauseHold && await isVerifiedIssueTreeControlInteractionWake(tx, {
           companyId: issue.companyId,
@@ -18062,6 +18124,27 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             finishedAt: new Date(),
           });
           return { kind: "skipped" as const };
+        }
+
+        if (reason === AGENT_TODO_CONTINUATION_REASON) {
+          const sourceRunId = readNonEmptyString(enrichedContextSnapshot.agentTodoContinuationSourceRunId);
+          const sourceRun = sourceRunId ? await tx.select().from(heartbeatRuns).where(and(
+            eq(heartbeatRuns.id, sourceRunId), eq(heartbeatRuns.companyId, agent.companyId),
+            eq(heartbeatRuns.agentId, agentId),
+          )).then((rows) => rows[0] ?? null) : null;
+          const currentPolicy = await tx.select({ executionState: issues.executionState })
+            .from(issues).where(eq(issues.id, issue.id)).then((rows) => rows[0]);
+          if (!sourceRun || !canContinueReturnedTodo({
+            issue: { ...issue, executionState: currentPolicy?.executionState ?? null },
+            companyId: agent.companyId, agentId, sourceStatus: sourceRun.status, promoting: false,
+          })) {
+            await tx.insert(agentWakeupRequests).values({
+              companyId: agent.companyId, agentId, source, triggerDetail,
+              reason: "issue_todo_continuation_no_longer_eligible", payload, status: "skipped",
+              idempotencyKey: opts.idempotencyKey ?? null, finishedAt: new Date(),
+            });
+            return { kind: "skipped" as const };
+          }
         }
 
         const cancelStaleScheduledRetry = async (scheduledRun: typeof heartbeatRuns.$inferSelect) => {

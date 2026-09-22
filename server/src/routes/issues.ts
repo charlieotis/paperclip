@@ -1,3 +1,4 @@
+import { enqueueAgentTodoContinuation } from "../services/issue-todo-continuation.js";
 import { createHash, randomUUID } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import multer from "multer";
@@ -10107,6 +10108,23 @@ export function issueRoutes(
       requestedByActorType: actor.actorType,
       requestedByActorId: actor.actorId,
     });
+
+    await enqueueAgentTodoContinuation(db, {
+      before: existing,
+      after: issue,
+      actor,
+      wakeup: heartbeat.wakeup,
+      onExhausted: async () => {
+        const note = await svc.addComment(issue.id,
+          "Automatic continuation paused after three follow-up runs. This ticket remains unfinished. A human or manager should inspect the latest handoff and explicitly resume it, clarify the next step, or mark it blocked.",
+          {}, { authorType: "system" });
+        await logActivity(db, {
+          companyId: issue.companyId, actorType: "system", actorId: "todo-continuation",
+          action: "issue.comment_added", entityType: "issue", entityId: issue.id,
+          details: { commentId: note.id, source: "todo_continuation_exhausted" },
+        });
+      },
+    }).catch((err) => logger.warn({ err, issueId: issue.id }, "failed to schedule returned-to-do continuation"));
 
     // Merge all wakeups from this update into one enqueue per agent to avoid duplicate runs.
     void (async () => {
