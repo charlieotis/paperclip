@@ -1330,7 +1330,13 @@ export async function startServer(): Promise<StartedServer> {
 
         if (heartbeatSchedulerStopped) return;
         scheduleMergedPullRequestConfirmationSweep();
-        scheduleTerminalWorkspaceSweep();
+        // LOCAL PATCH: terminal workspace sweep off (see projects/paperclip/UPDATE.md).
+        // Every execution_workspaces row on this box is local_fs/shared_workspace, which the
+        // reaper can never archive, so the sweep only ran `git status` on the shared checkout
+        // 100x/min forever. Gate it behind an env var; unset = upstream behaviour.
+        if (process.env.PAPERCLIP_DISABLE_TERMINAL_WORKSPACE_SWEEP !== "1") {
+          scheduleTerminalWorkspaceSweep();
+        }
         scheduleAdapterLoginReaperSweep();
         scheduleEnvironmentLeaseCleanupSweep();
 
