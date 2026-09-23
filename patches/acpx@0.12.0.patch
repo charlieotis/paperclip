@@ -1,5 +1,5 @@
 diff --git a/dist/live-checkpoint-ClPCSdrW.js b/dist/live-checkpoint-ClPCSdrW.js
-index 243c9d13bcba520923b63adfddad75cf2d94362d..336a1699b80b9e99416f9da4346ca73ee2ad1626 100644
+index 243c9d1..5491b1c 100644
 --- a/dist/live-checkpoint-ClPCSdrW.js
 +++ b/dist/live-checkpoint-ClPCSdrW.js
 @@ -1532,7 +1532,7 @@ const ZED_TAG_KEYS = /* @__PURE__ */ new Set([
@@ -20,9 +20,43 @@ index 243c9d13bcba520923b63adfddad75cf2d94362d..336a1699b80b9e99416f9da4346ca73e
  		current: state.current,
  		quote: state.quote,
  		escaping: true,
-@@ -3959,7 +3959,24 @@ var AcpClient = class {
--		this.attachAgentLifecycleObservers(child);
-+		this.attachAgentLifecycleObservers(child);
+@@ -2912,8 +2912,22 @@ function promotePrefixedAuthEnvironment(env) {
+ 	}
+ 	return protectedKeys;
+ }
++// LOCAL ACPX ENV SCRUB (Paperclip bridge; upstream master passes inheritProcessEnv=false instead).
++// Server-only secrets must never reach an agent or its terminals. The session env overlay is applied
++// afterwards, so PAPERCLIP_API_URL / PAPERCLIP_RUN_ID etc. passed by Paperclip still arrive.
++function scrubServerOnlyEnv(env) {
++	delete env.DATABASE_URL;
++	delete env.BETTER_AUTH_SECRET;
++	delete env.PAPERCLIPAI_CMD;
++	for (const key of Object.keys(env)) {
++		if (!key.startsWith("PAPERCLIP_")) continue;
++		if (key === "PAPERCLIP_RUNTIME_API_URL" || key === "PAPERCLIP_LISTEN_HOST" || key === "PAPERCLIP_LISTEN_PORT") continue;
++		delete env[key];
++	}
++	return env;
++}
+ function buildAgentEnvironment(authCredentials, sessionEnv) {
+-	const env = { ...process.env };
++	const env = scrubServerOnlyEnv({ ...process.env });
+ 	const protectedAuthEnvKeys = promotePrefixedAuthEnvironment(env);
+ 	if (authCredentials) for (const [methodId, credential] of Object.entries(authCredentials)) {
+ 		addAuthCredentialEnvKeys(protectedAuthEnvKeys, methodId, credential);
+@@ -3126,7 +3140,7 @@ function toCommandLine(command, args) {
+ }
+ function toEnvObject(env) {
+ 	if (!env || env.length === 0) return;
+-	const merged = { ...process.env };
++	const merged = scrubServerOnlyEnv({ ...process.env });
+ 	for (const entry of env) merged[entry.name] = entry.value;
+ 	return merged;
+ }
+@@ -3957,9 +3971,26 @@ var AcpClient = class {
+ 		this.lastAgentExit = void 0;
+ 		this.lastKnownPid = child.pid ?? void 0;
+ 		this.attachAgentLifecycleObservers(child);
 +		if (this.options.onAgentSpawn) {
 +			try {
 +				if (typeof child.pid !== "number" || child.pid <= 0) {
@@ -46,7 +80,7 @@ index 243c9d13bcba520923b63adfddad75cf2d94362d..336a1699b80b9e99416f9da4346ca73e
  			if (!this.options.verbose) return;
  			process.stderr.write(chunk);
  		});
-@@ -3994,7 +4011,7 @@ var AcpClient = class {
+@@ -3994,7 +4025,7 @@ var AcpClient = class {
  			geminiAcp: isGeminiAcpCommand(spawnCommand, args),
  			copilotAcp: isCopilotAcpCommand(spawnCommand, args),
  			claudeAcp: isClaudeAcpCommand(spawnCommand, args),
@@ -56,7 +90,7 @@ index 243c9d13bcba520923b63adfddad75cf2d94362d..336a1699b80b9e99416f9da4346ca73e
  	}
  	logAgentLaunch(plan) {
 diff --git a/dist/runtime.d.ts b/dist/runtime.d.ts
-index ccdbe5b032521518022223733049b8b38793473b..3d4e04231e78efeecd8540735b08e1e43547ff2d 100644
+index ccdbe5b..39f2c71 100644
 --- a/dist/runtime.d.ts
 +++ b/dist/runtime.d.ts
 @@ -266,6 +266,9 @@ type AcpRuntimeOptions = {
@@ -70,7 +104,7 @@ index ccdbe5b032521518022223733049b8b38793473b..3d4e04231e78efeecd8540735b08e1e4
      signal: AbortSignal;
    }) => Promise<AcpPermissionDecision | undefined>;
 diff --git a/dist/runtime.js b/dist/runtime.js
-index 6c9cc999e50a11c399c68b3a0f1b7af4bc2317c0..33b5054b2906502d1d4b512bfa259bd2ba5a9f05 100644
+index 6c9cc99..9a6a46c 100644
 --- a/dist/runtime.js
 +++ b/dist/runtime.js
 @@ -744,7 +744,8 @@ var AcpRuntimeManager = class {
@@ -84,7 +118,7 @@ index 6c9cc999e50a11c399c68b3a0f1b7af4bc2317c0..33b5054b2906502d1d4b512bfa259bd2
  	async readPendingPersistentClient(record, options) {
  		const pendingClient = this.pendingPersistentClients.get(record.acpxRecordId);
 diff --git a/dist/session-options-jkYbBxGE.d.ts b/dist/session-options-jkYbBxGE.d.ts
-index 9d37f377fb6a0828e0d2bc5a48754f3aa71509a4..680bc080fc5d6ffd266ed1b27d3d5056add9d980 100644
+index 9d37f37..67e76a6 100644
 --- a/dist/session-options-jkYbBxGE.d.ts
 +++ b/dist/session-options-jkYbBxGE.d.ts
 @@ -84,6 +84,9 @@ type AcpClientOptions = {
