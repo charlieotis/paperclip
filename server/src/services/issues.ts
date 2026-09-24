@@ -1,3 +1,4 @@
+import { hasReachableBlockerWork } from "./blocker-live-work.js";
 import { collectTerminalBlockers } from "./terminal-blockers.js";
 import { Buffer } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
@@ -2695,20 +2696,11 @@ async function listIssueBlockerAttentionMap(
     };
   };
 
-  const pathHasLiveWork = (nodeId: string, seen: Set<string>): boolean => {
-    if (seen.has(nodeId)) return false;
-    const node = nodesById.get(nodeId);
-    if (!node || node.companyId !== companyId) return false;
-    if (node.status === "in_progress" || activeIssueIds.has(node.id)) return true;
-
-    const nextSeen = new Set(seen);
-    nextSeen.add(nodeId);
-    return (edgesByIssueId.get(node.id) ?? []).some((edge) => {
-      const blocker = nodesById.get(edge.blockerIssueId);
-      if (blocker?.status === "done" && !pendingFinalizeBlockerIssueIds.has(edge.blockerIssueId)) return false;
-      return pathHasLiveWork(edge.blockerIssueId, nextSeen);
-    });
-  };
+  const pathHasLiveWork = (nodeId: string, seen: Set<string>): boolean =>
+    hasReachableBlockerWork(
+      nodeId, companyId, nodesById, edgesByIssueId,
+      activeIssueIds, pendingFinalizeBlockerIssueIds, seen,
+    );
 
   const issueIdForSample = (sample: string | null | undefined) => {
     if (!sample) return null;
