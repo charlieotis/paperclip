@@ -1,3 +1,5 @@
+import { hasReachableBlockerWork } from "./blocker-live-work.js";
+import { collectTerminalBlockers } from "./terminal-blockers.js";
 import { Buffer } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gt, gte, inArray, isNull, like, lt, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
@@ -2197,20 +2199,10 @@ async function terminalExplicitBlockersByRoot(
     frontier = [...nextFrontier];
   }
 
-  const collectTerminal = (issueId: string, seen: Set<string>): IssueRelationIssueSummary[] => {
-    if (seen.has(issueId)) return [];
-    const node = nodesById.get(issueId);
-    if (!node || node.status === "done") return [];
-    const nextSeen = new Set(seen);
-    nextSeen.add(issueId);
-    const downstreamIds = edgesByIssueId.get(issueId) ?? [];
-    if (downstreamIds.length === 0) return [node];
-    return downstreamIds.flatMap((downstreamId) => collectTerminal(downstreamId, nextSeen));
-  };
 
   for (const rootId of rootIds) {
     const deduped = new Map<string, IssueRelationIssueSummary>();
-    for (const blocker of collectTerminal(rootId, new Set())) {
+    for (const blocker of collectTerminalBlockers(rootId, nodesById, edgesByIssueId)) {
       if (blocker.id !== rootId) deduped.set(blocker.id, blocker);
     }
     if (deduped.size > 0) {
@@ -2704,20 +2696,11 @@ async function listIssueBlockerAttentionMap(
     };
   };
 
-  const pathHasLiveWork = (nodeId: string, seen: Set<string>): boolean => {
-    if (seen.has(nodeId)) return false;
-    const node = nodesById.get(nodeId);
-    if (!node || node.companyId !== companyId) return false;
-    if (node.status === "in_progress" || activeIssueIds.has(node.id)) return true;
-
-    const nextSeen = new Set(seen);
-    nextSeen.add(nodeId);
-    return (edgesByIssueId.get(node.id) ?? []).some((edge) => {
-      const blocker = nodesById.get(edge.blockerIssueId);
-      if (blocker?.status === "done" && !pendingFinalizeBlockerIssueIds.has(edge.blockerIssueId)) return false;
-      return pathHasLiveWork(edge.blockerIssueId, nextSeen);
-    });
-  };
+  const pathHasLiveWork = (nodeId: string, seen: Set<string>): boolean =>
+    hasReachableBlockerWork(
+      nodeId, companyId, nodesById, edgesByIssueId,
+      activeIssueIds, pendingFinalizeBlockerIssueIds, seen,
+    );
 
   const issueIdForSample = (sample: string | null | undefined) => {
     if (!sample) return null;
